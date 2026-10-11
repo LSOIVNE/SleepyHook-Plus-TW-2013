@@ -31,5 +31,7 @@
 *.app
 
 .vs
+Release/
 SleepyHook Plus/Release
 SleepyHook Plus/Debug
+SleepyHook Plus/*.9e268b39

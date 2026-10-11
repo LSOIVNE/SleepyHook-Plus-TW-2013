@@ -522,11 +522,87 @@ namespace LoginRegisterHook
 			}
 
 			std::string req = "REGISTER " + sUser + " " + sPass + "\n";
-			send(s, req.c_str(), (int)req.length(), 0);
-
 			char szResp[1024] = {};
-			int nRecv = recv(s, szResp, sizeof(szResp) - 1, 0);
-			closesocket(s);
+			int nRecv = 0;
+
+			if (HookFuncs::m_iEnableSSL)
+			{
+				typedef void* (*fn_SSLv23_client_method)();
+				typedef void* (*fn_SSL_CTX_new)(void* meth);
+				typedef void (*fn_SSL_CTX_free)(void* ctx);
+				typedef void* (*fn_SSL_new)(void* ctx);
+				typedef int (*fn_SSL_set_fd)(void* ssl, int fd);
+				typedef int (*fn_SSL_connect)(void* ssl);
+				typedef int (*fn_SSL_write)(void* ssl, const void* buf, int num);
+				typedef int (*fn_SSL_read)(void* ssl, void* buf, int num);
+				typedef int (*fn_SSL_shutdown)(void* ssl);
+				typedef void (*fn_SSL_free)(void* ssl);
+
+				HMODULE hSSLeay = GetModuleHandleA("SSLEAY32.dll");
+				if (!hSSLeay) hSSLeay = LoadLibraryA("SSLEAY32.dll");
+
+				fn_SSLv23_client_method pfn_SSLv23_client_method = hSSLeay ? (fn_SSLv23_client_method)GetProcAddress(hSSLeay, "SSLv23_client_method") : NULL;
+				fn_SSL_CTX_new pfn_SSL_CTX_new = hSSLeay ? (fn_SSL_CTX_new)GetProcAddress(hSSLeay, "SSL_CTX_new") : NULL;
+				fn_SSL_CTX_free pfn_SSL_CTX_free = hSSLeay ? (fn_SSL_CTX_free)GetProcAddress(hSSLeay, "SSL_CTX_free") : NULL;
+				fn_SSL_new pfn_SSL_new = hSSLeay ? (fn_SSL_new)GetProcAddress(hSSLeay, "SSL_new") : NULL;
+				fn_SSL_set_fd pfn_SSL_set_fd = hSSLeay ? (fn_SSL_set_fd)GetProcAddress(hSSLeay, "SSL_set_fd") : NULL;
+				fn_SSL_connect pfn_SSL_connect = hSSLeay ? (fn_SSL_connect)GetProcAddress(hSSLeay, "SSL_connect") : NULL;
+				fn_SSL_write pfn_SSL_write = hSSLeay ? (fn_SSL_write)GetProcAddress(hSSLeay, "SSL_write") : NULL;
+				fn_SSL_read pfn_SSL_read = hSSLeay ? (fn_SSL_read)GetProcAddress(hSSLeay, "SSL_read") : NULL;
+				fn_SSL_shutdown pfn_SSL_shutdown = hSSLeay ? (fn_SSL_shutdown)GetProcAddress(hSSLeay, "SSL_shutdown") : NULL;
+				fn_SSL_free pfn_SSL_free = hSSLeay ? (fn_SSL_free)GetProcAddress(hSSLeay, "SSL_free") : NULL;
+
+				if (!pfn_SSLv23_client_method || !pfn_SSL_CTX_new || !pfn_SSL_CTX_free || !pfn_SSL_new ||
+					!pfn_SSL_set_fd || !pfn_SSL_connect || !pfn_SSL_write || !pfn_SSL_read || !pfn_SSL_free)
+				{
+					closesocket(s);
+					ShowNativeMessageBox("#CSO_ServerMessage_Title", Utf8ToAnsi(u8"無法載入 SSL 加密模組 (SSLEAY32.dll)！").c_str());
+					return 0;
+				}
+
+				void* meth = pfn_SSLv23_client_method();
+				void* ctx = pfn_SSL_CTX_new(meth);
+				if (!ctx)
+				{
+					closesocket(s);
+					ShowNativeMessageBox("#CSO_ServerMessage_Title", Utf8ToAnsi(u8"初始化 SSL 環境失敗！").c_str());
+					return 0;
+				}
+
+				void* ssl = pfn_SSL_new(ctx);
+				if (!ssl)
+				{
+					pfn_SSL_CTX_free(ctx);
+					closesocket(s);
+					ShowNativeMessageBox("#CSO_ServerMessage_Title", Utf8ToAnsi(u8"建立 SSL 連線物件失敗！").c_str());
+					return 0;
+				}
+
+				pfn_SSL_set_fd(ssl, (int)s);
+
+				if (pfn_SSL_connect(ssl) <= 0)
+				{
+					pfn_SSL_free(ssl);
+					pfn_SSL_CTX_free(ctx);
+					closesocket(s);
+					ShowNativeMessageBox("#CSO_ServerMessage_Title", Utf8ToAnsi(u8"無法建立 SSL 加密連線！\n請確認伺服器已開啟 SSL 且證書配置正確。").c_str());
+					return 0;
+				}
+
+				pfn_SSL_write(ssl, req.c_str(), (int)req.length());
+				nRecv = pfn_SSL_read(ssl, szResp, sizeof(szResp) - 1);
+
+				if (pfn_SSL_shutdown) pfn_SSL_shutdown(ssl);
+				pfn_SSL_free(ssl);
+				pfn_SSL_CTX_free(ctx);
+				closesocket(s);
+			}
+			else
+			{
+				send(s, req.c_str(), (int)req.length(), 0);
+				nRecv = recv(s, szResp, sizeof(szResp) - 1, 0);
+				closesocket(s);
+			}
 
 			if (nRecv <= 0)
 			{
