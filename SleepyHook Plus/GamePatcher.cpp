@@ -295,14 +295,14 @@ namespace FontFix
 		{
 			// Trebuchet MS: used by Legacy_CreditsFont (Radio menu C/X/Z in titles.txt)
 			// Verdana: used by EngineFont (in-game PeriodicAnnouncements and console)
-			// Tahoma: used by fallback trackerscheme.res
+			// Tahoma: keep as Tahoma! Tahoma has native Windows FontLink (PMingLiU/SimSun) with 10x9/12x12 bold bitmap glyphs.
+			// Microsoft JhengHei: outline font with aggressive stroke-dropping at small sizes (e.g. 錢 disappears) -> redirect to Tahoma
 			if (_stricmp(windowsFontName, "Trebuchet MS") == 0 ||
 				_stricmp(windowsFontName, "Verdana") == 0 ||
-				_stricmp(windowsFontName, "Tahoma") == 0)
+				_stricmp(windowsFontName, "Microsoft JhengHei") == 0)
 			{
-				Utils::ConsolePrint("[ FontFix ] Redirected font '%s' -> 'Microsoft JhengHei' (tall: %d, weight: %d)\n", windowsFontName, tall, weight);
-				windowsFontName = "Microsoft JhengHei";
-				flags |= 0x10; // FONTFLAG_ANTIALIAS
+				Utils::ConsolePrint("[ FontFix ] Redirected font '%s' -> 'Tahoma' (tall: %d, weight: %d)\n", windowsFontName, tall, weight);
+				windowsFontName = "Tahoma";
 			}
 		}
 		return oCWin32Font__Create(thisptr, windowsFontName, tall, weight, blur, scanlines, flags);
@@ -314,11 +314,10 @@ namespace FontFix
 		{
 			if (_stricmp(windowsFontName, "Trebuchet MS") == 0 ||
 				_stricmp(windowsFontName, "Verdana") == 0 ||
-				_stricmp(windowsFontName, "Tahoma") == 0)
+				_stricmp(windowsFontName, "Microsoft JhengHei") == 0)
 			{
-				Utils::ConsolePrint("[ FontFix-VGUI2 ] Redirected font '%s' -> 'Microsoft JhengHei' (tall: %d, weight: %d)\n", windowsFontName, tall, weight);
-				windowsFontName = "Microsoft JhengHei";
-				flags |= 0x10; // FONTFLAG_ANTIALIAS
+				Utils::ConsolePrint("[ FontFix-VGUI2 ] Redirected font '%s' -> 'Tahoma' (tall: %d, weight: %d)\n", windowsFontName, tall, weight);
+				windowsFontName = "Tahoma";
 			}
 		}
 		return oVGui2Font__Create(thisptr, windowsFontName, tall, weight, blur, scanlines, flags);
@@ -340,10 +339,9 @@ namespace FontFix
 		{
 			if (_stricmp(pszFaceName, "Trebuchet MS") == 0 ||
 				_stricmp(pszFaceName, "Verdana") == 0 ||
-				_stricmp(pszFaceName, "Tahoma") == 0)
+				_stricmp(pszFaceName, "Microsoft JhengHei") == 0)
 			{
-				pszFaceName = "Microsoft JhengHei";
-				iQuality = 5; // CLEARTYPE_QUALITY
+				pszFaceName = "Tahoma";
 			}
 		}
 		return oCreateFontA(cHeight, cWidth, cEscapement, cOrientation, cWeight,
@@ -419,7 +417,7 @@ void GamePatcher()
 
 	MH_InlineHook((void*)0x3715BD40, HookFuncs::FS_MountAllNarFiles, (void*&)HookFuncs::oFS_MountAllNarFiles);
 
-	// FontFix: 將 VGUI 創建西文字體 (Trebuchet MS / Verdana) 自動重定向為微軟正黑體 (Microsoft JhengHei)
+	// FontFix: 將 VGUI 缺少中文字體鏈接的西文字體 (Trebuchet MS / Verdana) 自動重定向為支援 FontLink 的標準字體 (Tahoma)
 	MH_InlineHook((void*)0x373A9C10, FontFix::CWin32Font__Create, (void*&)FontFix::oCWin32Font__Create);
 	FontFix::oCreateFontA = *(decltype(FontFix::oCreateFontA)*)0x374E8118;
 	void* pNewCreateFontA = (void*)FontFix::Hook_CreateFontA;
