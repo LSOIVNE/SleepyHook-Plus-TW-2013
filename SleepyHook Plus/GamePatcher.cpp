@@ -1,4 +1,4 @@
-﻿#include <Windows.h>
+#include <Windows.h>
 #include "Main.h"
 #include "MetaHook.h"
 #include "Utils.h"
@@ -283,6 +283,76 @@ namespace HookFuncs
 	}
 }
 
+namespace FontFix
+{
+	typedef bool(__thiscall* CWin32Font__Create_t)(void* thisptr, const char* windowsFontName, int tall, int weight, int blur, int scanlines, int flags);
+	CWin32Font__Create_t oCWin32Font__Create = nullptr;
+	CWin32Font__Create_t oVGui2Font__Create = nullptr;
+
+	bool __fastcall CWin32Font__Create(void* thisptr, void* edx, const char* windowsFontName, int tall, int weight, int blur, int scanlines, int flags)
+	{
+		if (windowsFontName)
+		{
+			// Trebuchet MS: used by Legacy_CreditsFont (Radio menu C/X/Z in titles.txt)
+			// Verdana: used by EngineFont (in-game PeriodicAnnouncements and console)
+			// Tahoma: used by fallback trackerscheme.res
+			if (_stricmp(windowsFontName, "Trebuchet MS") == 0 ||
+				_stricmp(windowsFontName, "Verdana") == 0 ||
+				_stricmp(windowsFontName, "Tahoma") == 0)
+			{
+				Utils::ConsolePrint("[ FontFix ] Redirected font '%s' -> 'Microsoft JhengHei' (tall: %d, weight: %d)\n", windowsFontName, tall, weight);
+				windowsFontName = "Microsoft JhengHei";
+				flags |= 0x10; // FONTFLAG_ANTIALIAS
+			}
+		}
+		return oCWin32Font__Create(thisptr, windowsFontName, tall, weight, blur, scanlines, flags);
+	}
+
+	bool __fastcall VGui2Font__Create(void* thisptr, void* edx, const char* windowsFontName, int tall, int weight, int blur, int scanlines, int flags)
+	{
+		if (windowsFontName)
+		{
+			if (_stricmp(windowsFontName, "Trebuchet MS") == 0 ||
+				_stricmp(windowsFontName, "Verdana") == 0 ||
+				_stricmp(windowsFontName, "Tahoma") == 0)
+			{
+				Utils::ConsolePrint("[ FontFix-VGUI2 ] Redirected font '%s' -> 'Microsoft JhengHei' (tall: %d, weight: %d)\n", windowsFontName, tall, weight);
+				windowsFontName = "Microsoft JhengHei";
+				flags |= 0x10; // FONTFLAG_ANTIALIAS
+			}
+		}
+		return oVGui2Font__Create(thisptr, windowsFontName, tall, weight, blur, scanlines, flags);
+	}
+
+	HFONT(WINAPI* oCreateFontA)(
+		int cHeight, int cWidth, int cEscapement, int cOrientation, int cWeight,
+		DWORD bItalic, DWORD bUnderline, DWORD bStrikeOut, DWORD iCharSet,
+		DWORD iOutPrecision, DWORD iClipPrecision, DWORD iQuality, DWORD iPitchAndFamily,
+		LPCSTR pszFaceName) = nullptr;
+
+	HFONT WINAPI Hook_CreateFontA(
+		int cHeight, int cWidth, int cEscapement, int cOrientation, int cWeight,
+		DWORD bItalic, DWORD bUnderline, DWORD bStrikeOut, DWORD iCharSet,
+		DWORD iOutPrecision, DWORD iClipPrecision, DWORD iQuality, DWORD iPitchAndFamily,
+		LPCSTR pszFaceName)
+	{
+		if (pszFaceName)
+		{
+			if (_stricmp(pszFaceName, "Trebuchet MS") == 0 ||
+				_stricmp(pszFaceName, "Verdana") == 0 ||
+				_stricmp(pszFaceName, "Tahoma") == 0)
+			{
+				pszFaceName = "Microsoft JhengHei";
+				iQuality = 5; // CLEARTYPE_QUALITY
+			}
+		}
+		return oCreateFontA(cHeight, cWidth, cEscapement, cOrientation, cWeight,
+			bItalic, bUnderline, bStrikeOut, iCharSet,
+			iOutPrecision, iClipPrecision, iQuality, iPitchAndFamily,
+			pszFaceName);
+	}
+}
+
 DWORD WINAPI SubModulePatcher()
 {
 	uintptr_t dwGameUI = NULL;
@@ -305,6 +375,13 @@ DWORD WINAPI SubModulePatcher()
 	uintptr_t dwEV_HLDM_DecalGunshot = Utils::FindSignature("client.dll", "83 FE 25 74 ? 83 FE 29 74 ?");
 	if (dwEV_HLDM_DecalGunshot)
 		WriteBytes((void*)(dwEV_HLDM_DecalGunshot + 3), (void*)"\x90\x90", 2);
+
+	// FontFix for vgui2.dll (if used)
+	uintptr_t dwVGui2 = (uintptr_t)GetModuleHandleA("vgui2.dll");
+	if (dwVGui2)
+	{
+		MH_InlineHook((void*)(dwVGui2 + 0x1F300), FontFix::VGui2Font__Create, (void*&)FontFix::oVGui2Font__Create);
+	}
 
 	return 1;
 }
@@ -341,6 +418,12 @@ void GamePatcher()
 	WriteBytes((void*)0x372207B0, (void*)"\x31\xC0", 2);
 
 	MH_InlineHook((void*)0x3715BD40, HookFuncs::FS_MountAllNarFiles, (void*&)HookFuncs::oFS_MountAllNarFiles);
+
+	// FontFix: 將 VGUI 創建西文字體 (Trebuchet MS / Verdana) 自動重定向為微軟正黑體 (Microsoft JhengHei)
+	MH_InlineHook((void*)0x373A9C10, FontFix::CWin32Font__Create, (void*&)FontFix::oCWin32Font__Create);
+	FontFix::oCreateFontA = *(decltype(FontFix::oCreateFontA)*)0x374E8118;
+	void* pNewCreateFontA = (void*)FontFix::Hook_CreateFontA;
+	WriteBytes((void*)0x374E8118, &pNewCreateFontA, sizeof(void*));
 
 	CreateThread(nullptr, NULL, (LPTHREAD_START_ROUTINE)SubModulePatcher, nullptr, 0, nullptr);
 }
