@@ -351,6 +351,220 @@ namespace FontFix
 	}
 }
 
+namespace LoginRegisterHook
+{
+	uintptr_t g_dwGameUI = 0;
+
+	// Typedefs for VGUI2 controls in GameUI.dll
+	typedef void* (__cdecl* pfnOperatorNew_t)(size_t size);
+	typedef void* (__thiscall* ButtonConstructor_t)(void* thisptr, void* parent, const char* panelName, const char* text);
+	typedef void (__thiscall* PanelSetBounds_t)(void* thisptr, int x, int y, int wide, int tall);
+	typedef void (__thiscall* ButtonSetCommand_t)(void* thisptr, const char* cmd);
+	typedef void* (__thiscall* FindChildByName_t)(void* thisptr, const char* name, bool recurseDown);
+	typedef void (__thiscall* TextEntryGetText_t)(void* thisptr, char* buf, int bufLen);
+
+	void* oCLoginDlg_Constructor = nullptr;
+	void* oCLoginDlg_OnCommand = nullptr;
+
+	void* __fastcall Hook_CLoginDlg_Constructor(void* thisptr, void* edx, int a2)
+	{
+		typedef void* (__thiscall* CLoginDlgCtor_t)(void* thisptr, int a2);
+		void* pDlg = ((CLoginDlgCtor_t)oCLoginDlg_Constructor)(thisptr, a2);
+		if (!pDlg || !g_dwGameUI)
+			return pDlg;
+
+		pfnOperatorNew_t pfnNew = (pfnOperatorNew_t)(g_dwGameUI + 0x209569);
+		ButtonConstructor_t pfnButtonCtor = (ButtonConstructor_t)(g_dwGameUI + 0x1B2D10);
+		PanelSetBounds_t pfnSetBounds = (PanelSetBounds_t)(g_dwGameUI + 0x195340);
+		ButtonSetCommand_t pfnSetCommand = (ButtonSetCommand_t)(g_dwGameUI + 0x1B4670);
+		FindChildByName_t pfnFindChild = (FindChildByName_t)(g_dwGameUI + 0x196ED0);
+
+		// 1. Reposition LoginBtn to (148, 141, 92, 32)
+		void* pLoginBtn = pfnFindChild(pDlg, "LoginBtn", false);
+		if (pLoginBtn)
+		{
+			pfnSetBounds(pLoginBtn, 148, 141, 92, 32);
+		}
+
+		// 2. Reposition CloseBtn to (248, 141, 92, 32)
+		void* pCloseBtn = pfnFindChild(pDlg, "CloseBtn", false);
+		if (pCloseBtn)
+		{
+			pfnSetBounds(pCloseBtn, 248, 141, 92, 32);
+		}
+
+		// 3. Create RegisterBtn at (48, 141, 92, 32)
+		void* pRegBtnMem = pfnNew(0x18C);
+		if (pRegBtnMem)
+		{
+			void* pRegBtn = pfnButtonCtor(pRegBtnMem, pDlg, "RegisterBtn", "註冊帳號");
+			if (pRegBtn)
+			{
+				pfnSetBounds(pRegBtn, 48, 141, 92, 32);
+				pfnSetCommand(pRegBtn, "Register");
+				// Ensure visible: call vtable[0x94 / 4] (Panel::SetVisible)
+				(*(void (__thiscall **)(void*, int))(*(DWORD*)pRegBtn + 0x94))(pRegBtn, 1);
+			}
+		}
+
+		return pDlg;
+	}
+
+	static std::string Utf8ToAnsi(const std::string& utf8)
+	{
+		if (utf8.empty()) return "";
+		int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.length(), NULL, 0);
+		if (wlen <= 0) return utf8;
+		std::vector<wchar_t> wbuf(wlen);
+		MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), (int)utf8.length(), wbuf.data(), wlen);
+		int alen = WideCharToMultiByte(CP_ACP, 0, wbuf.data(), wlen, NULL, 0, NULL, NULL);
+		if (alen <= 0) return utf8;
+		std::string ansi(alen, '\0');
+		WideCharToMultiByte(CP_ACP, 0, wbuf.data(), wlen, &ansi[0], alen, NULL, NULL);
+		return ansi;
+	}
+
+	static void ShowNativeMessageBox(const char* pszTitle, const char* pszMessage)
+	{
+		void* pGameUI = *(void**)0x375B6DBC;
+		if (!pGameUI && g_dwGameUI)
+		{
+			typedef void* (*CreateInterfaceFn)(const char* pName, int* pReturnCode);
+			CreateInterfaceFn fnCreateInterface = (CreateInterfaceFn)GetProcAddress((HMODULE)g_dwGameUI, "CreateInterface");
+			if (fnCreateInterface)
+				pGameUI = fnCreateInterface("GameUI007", NULL);
+		}
+
+		if (pGameUI)
+		{
+			typedef void (__thiscall* ShowMessageBox_t)(void* thisptr, const char* title, const char* message);
+			ShowMessageBox_t fnShowMsgBox = *(ShowMessageBox_t*)(*(DWORD*)pGameUI + 0xA8);
+			fnShowMsgBox(pGameUI, pszTitle, pszMessage);
+			return;
+		}
+
+		MessageBoxA(NULL, pszMessage, pszTitle, MB_OK | MB_ICONINFORMATION);
+	}
+
+	char __fastcall Hook_CLoginDlg_OnCommand(void* thisptr, void* edx, const char* pszCommand)
+	{
+		if (pszCommand && _stricmp(pszCommand, "Register") == 0)
+		{
+			// Read ID and Password
+			char szID[256] = {};
+			char szPass[256] = {};
+
+			void* pTextID = *(void**)((char*)thisptr + 89 * sizeof(void*));
+			void* pTextPass = *(void**)((char*)thisptr + 90 * sizeof(void*));
+
+			if (pTextID && pTextPass)
+			{
+				TextEntryGetText_t fnGetTextID = *(TextEntryGetText_t*)(*(DWORD*)pTextID + 596);
+				TextEntryGetText_t fnGetTextPass = *(TextEntryGetText_t*)(*(DWORD*)pTextPass + 596);
+				fnGetTextID(pTextID, szID, sizeof(szID));
+				fnGetTextPass(pTextPass, szPass, sizeof(szPass));
+			}
+
+			std::string sUser(szID);
+			std::string sPass(szPass);
+			while (!sUser.empty() && (sUser.back() == ' ' || sUser.back() == '\r' || sUser.back() == '\n' || sUser.back() == '\t')) sUser.pop_back();
+			while (!sPass.empty() && (sPass.back() == ' ' || sPass.back() == '\r' || sPass.back() == '\n' || sPass.back() == '\t')) sPass.pop_back();
+
+			if (sUser.empty() || sPass.empty())
+			{
+				ShowNativeMessageBox("#CSO_ServerMessage_Title", Utf8ToAnsi(u8"請在上方輸入要註冊的帳號與密碼！").c_str());
+				return 0;
+			}
+
+			if (sUser.length() < 3 || sUser.length() > 16)
+			{
+				ShowNativeMessageBox("#CSO_ServerMessage_Title", Utf8ToAnsi(u8"帳號長度需介於 3 到 16 個字元！").c_str());
+				return 0;
+			}
+
+			if (sPass.length() < 4 || sPass.length() > 20)
+			{
+				ShowNativeMessageBox("#CSO_ServerMessage_Title", Utf8ToAnsi(u8"密碼長度需介於 4 到 20 個字元！").c_str());
+				return 0;
+			}
+
+			for (char c : sUser)
+			{
+				if (!isalnum((unsigned char)c) && c != '_' && c != '-')
+				{
+					ShowNativeMessageBox("#CSO_ServerMessage_Title", Utf8ToAnsi(u8"帳號僅能使用英文字母、數字與底線！").c_str());
+					return 0;
+				}
+			}
+
+			// Send registration request to server on port (ntohs(m_iHostPort) + 1 or 8002)
+			SOCKET s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+			if (s == INVALID_SOCKET)
+			{
+				ShowNativeMessageBox("#CSO_ServerMessage_Title", Utf8ToAnsi(u8"網路通訊端建立失敗！").c_str());
+				return 0;
+			}
+
+			DWORD timeout = 4000; // 4 seconds
+			setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+			setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof(timeout));
+
+			sockaddr_in saddr = {};
+			saddr.sin_family = AF_INET;
+			saddr.sin_addr.s_addr = m_iHostIPAddress;
+			saddr.sin_port = htons(ntohs(m_iHostPort) + 1); // default 8002
+
+			if (connect(s, (sockaddr*)&saddr, sizeof(saddr)) != 0)
+			{
+				closesocket(s);
+				ShowNativeMessageBox("#CSO_ServerMessage_Title", Utf8ToAnsi(u8"無法連線至註冊伺服器 (8002)，請確認伺服器已開啟！").c_str());
+				return 0;
+			}
+
+			std::string req = "REGISTER " + sUser + " " + sPass + "\n";
+			send(s, req.c_str(), (int)req.length(), 0);
+
+			char szResp[1024] = {};
+			int nRecv = recv(s, szResp, sizeof(szResp) - 1, 0);
+			closesocket(s);
+
+			if (nRecv <= 0)
+			{
+				ShowNativeMessageBox("#CSO_ServerMessage_Title", Utf8ToAnsi(u8"伺服器未回應註冊結果，請稍後再試！").c_str());
+				return 0;
+			}
+
+			szResp[nRecv] = '\0';
+			std::string resp(szResp);
+
+			if (resp.rfind("OK:", 0) == 0)
+			{
+				std::string msg = resp.substr(3);
+				while (!msg.empty() && (msg.back() == '\r' || msg.back() == '\n')) msg.pop_back();
+				std::string ansiMsg = Utf8ToAnsi(msg);
+				ShowNativeMessageBox("#CSO_ServerMessage_Title", ansiMsg.c_str());
+			}
+			else if (resp.rfind("ERR:", 0) == 0)
+			{
+				std::string msg = resp.substr(4);
+				while (!msg.empty() && (msg.back() == '\r' || msg.back() == '\n')) msg.pop_back();
+				std::string ansiMsg = Utf8ToAnsi(msg);
+				ShowNativeMessageBox("#CSO_ServerMessage_Title", ansiMsg.c_str());
+			}
+			else
+			{
+				std::string ansiMsg = Utf8ToAnsi(resp);
+				ShowNativeMessageBox("#CSO_ServerMessage_Title", ansiMsg.c_str());
+			}
+
+			return 0;
+		}
+
+		typedef char (__thiscall* CLoginDlgOnCommand_t)(void* thisptr, const char* pszCommand);
+		return ((CLoginDlgOnCommand_t)oCLoginDlg_OnCommand)(thisptr, pszCommand);
+	}
+}
+
 DWORD WINAPI SubModulePatcher()
 {
 	uintptr_t dwGameUI = NULL;
@@ -363,7 +577,12 @@ DWORD WINAPI SubModulePatcher()
 			break;
 		std::this_thread::sleep_for(std::chrono::milliseconds(100));
 	}
-	// Waiting for memory initialization
+	// 掛載登入介面 CLoginDlg 註冊按鈕與指令處理
+	LoginRegisterHook::g_dwGameUI = dwGameUI;
+	MH_InlineHook((void*)(dwGameUI + 0x60190), LoginRegisterHook::Hook_CLoginDlg_Constructor, LoginRegisterHook::oCLoginDlg_Constructor);
+	MH_InlineHook((void*)(dwGameUI + 0x603B0), LoginRegisterHook::Hook_CLoginDlg_OnCommand, LoginRegisterHook::oCLoginDlg_OnCommand);
+
+	// 等待其餘模組與記憶體初始化完成
 	std::this_thread::sleep_for(std::chrono::milliseconds(3000));
 	HookFuncs::oCOptionsDialog__OnCommand = reinterpret_cast<HookFuncs::COptionsDialog__OnCommand_t>(dwGameUI + 0x1E3220);
 	// Vtable hook
@@ -389,14 +608,21 @@ void GamePatcher()
 	Utils::AttachConsole();
 	
 	std::string sIpAddr = CommandLine()->GetParmValue("-ip");
+	if (sIpAddr.empty())
+		sIpAddr = "127.0.0.1";
 	unsigned short nPort = CommandLine()->GetParmValue("-port", 0);
+	if (nPort == 0)
+		nPort = 8001;
 	m_iHostIPAddress = inet_addr(sIpAddr.c_str());
 	m_iHostPort = htons(nPort);
 	if (CommandLine()->CheckParm("-nossl") != NULL)
 		HookFuncs::m_iEnableSSL = 0;
+	else
+		HookFuncs::m_iEnableSSL = 1;
 
 	Utils::ConsolePrint("IP: %s\n", sIpAddr.c_str());
 	Utils::ConsolePrint("Port: %d\n", nPort);
+	Utils::ConsolePrint("SSL: %s\n", HookFuncs::m_iEnableSSL ? "Enabled" : "Disabled");
 
 	MH_InlineHook((void*)0x37297D80, HackShield::SetACInit, (void*&)HackShield::oSetACInit);
 	MH_InlineHook((void*)0x37442F60, HackShield::Hook2, (void*&)HackShield::oHook2);
@@ -414,6 +640,15 @@ void GamePatcher()
 	MH_InlineHook((void*)0x37442810, CSONMWrapper::CheckIsAge18, (void*&)CSONMWrapper::oCheckIsAge18);
 	MH_InlineHook((void*)0x372FBDB0, CSONMWrapper::COutPacket__SendLoginPacket, (void*&)CSONMWrapper::oCOutPacket__SendLoginPacket);
 	WriteBytes((void*)0x372207B0, (void*)"\x31\xC0", 2);
+	// 修正登入帳號不存在/錯誤無任何彈窗提示反饋 (hw.dll sub_37220770 case 3 / case 10 / case 14)：
+	// 原版 hw.dll 在接收到 Packet_Reply 類型 3 (InvalidName) 或 10 (SysError) 時，
+	// 若 dword_383CA528 != 0 (遊戲啟動即常駐非零)，會走入 LABEL_37 調用 sub_372212F0 將錯誤字串存入內部對象而不彈窗。
+	// 將條件跳轉強行改為無條件跳轉，直接呼叫 CGameUI::ShowMessageBox("#CSO_ServerMessage_Title", "#CSO_ServerMessage_InvalidName")，
+	// 與密碼錯誤 (case 7) 一樣正常彈出遊戲內置「錯誤的遊戲帳號.」對話框。
+	WriteBytes((void*)0x37220930, (void*)"\xEB\x23\x90\x90\x90\x90\x90\x90", 8); // case 3: InvalidName -> loc_37220955
+	WriteBytes((void*)0x372209CF, (void*)"\xEB\x23\x90\x90\x90\x90\x90\x90", 8); // case 10: SysError -> loc_372209F4
+	WriteBytes((void*)0x37220A6E, (void*)"\xEB\x46\x90\x90\x90\x90\x90\x90", 8); // case 14: ID_NOT_ALLOWD -> loc_37220AB6
+	WriteBytes((void*)0x371861AC, (void*)"\xEB\x0A", 2); // Skip missing external texture MessageBoxA
 
 	MH_InlineHook((void*)0x3715BD40, HookFuncs::FS_MountAllNarFiles, (void*&)HookFuncs::oFS_MountAllNarFiles);
 
@@ -422,6 +657,10 @@ void GamePatcher()
 	FontFix::oCreateFontA = *(decltype(FontFix::oCreateFontA)*)0x374E8118;
 	void* pNewCreateFontA = (void*)FontFix::Hook_CreateFontA;
 	WriteBytes((void*)0x374E8118, &pNewCreateFontA, sizeof(void*));
+
+	// 禁用 COpenglDetect 背景反透視/OpenGL 完整性檢測執行緒 (線程入口直接 xor eax, eax; ret 4)
+	// 徹底解決現代顯卡驅動/錄影覆蓋 (NVIDIA GeForce Experience nvspcap.dll / Discord / OBS 等) 觸發 Cdisasm 解析崩潰 (0xC0000005 at hw.dll+0xBEAEF)
+	WriteBytes((void*)0x371BECFA, (void*)"\x31\xC0\xC2\x04\x00\x90", 6);
 
 	CreateThread(nullptr, NULL, (LPTHREAD_START_ROUTINE)SubModulePatcher, nullptr, 0, nullptr);
 }

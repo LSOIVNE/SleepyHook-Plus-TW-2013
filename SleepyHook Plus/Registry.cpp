@@ -21,7 +21,7 @@ private:
 	HKEY m_hKey;
 };
 
-static CRegistry g_Registry;
+CRegistry g_Registry;
 IRegistry* registry = (IRegistry*)&g_Registry;
 
 CRegistry::CRegistry(void)
