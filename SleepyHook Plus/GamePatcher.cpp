@@ -679,6 +679,50 @@ DWORD WINAPI SubModulePatcher()
 	return 1;
 }
 
+DWORD WINAPI MpDllPatcher(LPVOID)
+{
+	while (true)
+	{
+		HMODULE hMp = GetModuleHandleA("mp.dll");
+		if (hMp)
+		{
+			uintptr_t dwMp = (uintptr_t)hMp;
+			// 0xEC0D5 是原版 0F 84 EE 04 00 00 (je 0x100EC5C9) 的偏移
+			unsigned char* pTarget = (unsigned char*)(dwMp + 0xEC0D5);
+			if (memcmp(pTarget, "\x0F\x84\xEE\x04\x00\x00", 6) == 0)
+			{
+				WriteBytes(pTarget, (void*)"\x90\x90\x90\x90\x90\x90", 6);
+				Utils::ConsolePrint("[SleepyHook] Successfully hooked mp.dll at 0x%p (Bypassed pfnIsDedicatedServer drop limit)!\n", pTarget);
+				return 0; // 成功 Hook 後直接銷毀線程，與 2014 啟動器一致，不殘留輪詢
+			}
+			else if (memcmp(pTarget, "\x90\x90\x90\x90\x90\x90", 6) == 0)
+			{
+				// 已經是 NOP，直接退出線程
+				return 0;
+			}
+			else
+			{
+				// 特徵碼保底搜尋 (若日後版本偏移有所位移)
+				uintptr_t dwSig = Utils::FindSignature("mp.dll", "83 EC 64 53 55 56 8B F1 57 89 74 24 20 FF 15 ? ? ? ? 85 C0 0F 84");
+				if (dwSig)
+				{
+					unsigned char* pSigTarget = (unsigned char*)(dwSig + 21);
+					if (memcmp(pSigTarget, "\x0F\x84", 2) == 0)
+					{
+						WriteBytes(pSigTarget, (void*)"\x90\x90\x90\x90\x90\x90", 6);
+						Utils::ConsolePrint("[SleepyHook] Successfully hooked mp.dll via signature at 0x%p!\n", pSigTarget);
+						return 0;
+					}
+				}
+				// 若不是預期字節且特徵碼未匹配，為保護遊戲進程安全直接退出，絕不盲目覆蓋
+				return 0;
+			}
+		}
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+	}
+	return 0;
+}
+
 void GamePatcher() 
 {
 	Utils::AttachConsole();
@@ -739,4 +783,5 @@ void GamePatcher()
 	WriteBytes((void*)0x371BECFA, (void*)"\x31\xC0\xC2\x04\x00\x90", 6);
 
 	CreateThread(nullptr, NULL, (LPTHREAD_START_ROUTINE)SubModulePatcher, nullptr, 0, nullptr);
+	CreateThread(nullptr, NULL, (LPTHREAD_START_ROUTINE)MpDllPatcher, nullptr, 0, nullptr);
 }
