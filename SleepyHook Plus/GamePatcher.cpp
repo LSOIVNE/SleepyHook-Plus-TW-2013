@@ -2173,25 +2173,57 @@ namespace BotPatch
 		g_dwMpSize = ReadModuleImageSize(dwMp);
 		Utils::ConsolePrint("[SleepyHook] mp.dll base=0x%p size=0x%X\n", (void*)dwMp, (unsigned)g_dwMpSize);
 
-		// 1. Dedicated server drop limit bypass (0xEC0D5)
-		unsigned char* pTarget = (unsigned char*)(dwMp + 0xEC0D5);
-		if (memcmp(pTarget, "\x0F\x84\xEE\x04\x00\x00", 6) == 0)
+		// -----------------------------------------------------------------------
+		// Version fingerprint / safety gate.
+		//
+		// Every patch below writes at a HARD-CODED offset. If this mp.dll is not the
+		// build we reverse engineered, those writes would land in the middle of
+		// unrelated code and corrupt the module. So before touching anything we
+		// verify the known bytes at the dedicated-server drop-limit site:
+		//
+		//   mp.dll+0xEC0D5   0F 84 EE 04 00 00   (je 0xEC5C9)
+		//
+		// with a pattern-search fallback for builds where that offset moved
+		// (83 EC 64 53 55 56 8B F1 57 89 74 24 20 FF 15 ? ? ? ? 85 C0 0F 84,
+		//  patched at +21). This preserves the original one-shot patcher's promise
+		// not to blindly overwrite an unknown build - it used to bail out with
+		// "若不是預期字節且特徵碼未匹配，為保護遊戲進程安全直接退出，絕不盲目覆蓋".
+		//
+		// If neither matches, log once and leave mp.dll completely untouched.
+		// g_dwLastPatchedMp is already set, so we do not retry or spam; it is reset
+		// when mp.dll unloads, so the next map gets a fresh chance.
+		// -----------------------------------------------------------------------
+		unsigned char* pDropLimit = (unsigned char*)(dwMp + 0xEC0D5);
+		uintptr_t dwDropSig = 0;
+		bool bFingerprintOk = (memcmp(pDropLimit, "\x0F\x84\xEE\x04\x00\x00", 6) == 0);
+
+		if (!bFingerprintOk)
 		{
-			WriteBytes(pTarget, (void*)"\x90\x90\x90\x90\x90\x90", 6);
-			Utils::ConsolePrint("[SleepyHook] Successfully hooked mp.dll at 0x%p (Bypassed pfnIsDedicatedServer drop limit)!\n", pTarget);
+			dwDropSig = Utils::FindSignature("mp.dll",
+				"83 EC 64 53 55 56 8B F1 57 89 74 24 20 FF 15 ? ? ? ? 85 C0 0F 84");
+			if (dwDropSig && memcmp((void*)(dwDropSig + 21), "\x0F\x84", 2) == 0)
+				bFingerprintOk = true;
+		}
+
+		if (!bFingerprintOk)
+		{
+			Utils::ConsolePrint("[SleepyHook] Unsupported mp.dll at 0x%p: no \"0F 84 EE 04 00 00\" at +0xEC0D5 "
+				"and the fallback signature was not found either. No BOT patch was applied - the game runs stock.\n",
+				(void*)dwMp);
+			return;
+		}
+
+		// 1. Dedicated server drop limit bypass (0xEC0D5)
+		if (memcmp(pDropLimit, "\x0F\x84\xEE\x04\x00\x00", 6) == 0)
+		{
+			WriteBytes(pDropLimit, (void*)"\x90\x90\x90\x90\x90\x90", 6);
+			Utils::ConsolePrint("[SleepyHook] Successfully hooked mp.dll at 0x%p (Bypassed pfnIsDedicatedServer drop limit)!\n", pDropLimit);
 		}
 		else
 		{
-			uintptr_t dwSig = Utils::FindSignature("mp.dll", "83 EC 64 53 55 56 8B F1 57 89 74 24 20 FF 15 ? ? ? ? 85 C0 0F 84");
-			if (dwSig)
-			{
-				unsigned char* pSigTarget = (unsigned char*)(dwSig + 21);
-				if (memcmp(pSigTarget, "\x0F\x84", 2) == 0)
-				{
-					WriteBytes(pSigTarget, (void*)"\x90\x90\x90\x90\x90\x90", 6);
-					Utils::ConsolePrint("[SleepyHook] Successfully hooked mp.dll via signature at 0x%p!\n", pSigTarget);
-				}
-			}
+			unsigned char* pSigTarget = (unsigned char*)(dwDropSig + 21);
+			WriteBytes(pSigTarget, (void*)"\x90\x90\x90\x90\x90\x90", 6);
+			Utils::ConsolePrint("[SleepyHook] Successfully hooked mp.dll via signature at 0x%p!\n", pSigTarget);
 		}
 
 		// 2. MaintainBotQuota mode check (0x92ECA, 32 bytes)
